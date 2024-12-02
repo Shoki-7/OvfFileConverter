@@ -1,7 +1,8 @@
 import struct
 import numpy as np
+import re
 
-def read_ovf_file(filename):
+def read_ovf_file(filename, output_mode='both'):
     """
     OVFファイルを読み込み、バイナリ形式またはテキスト形式でデータを読み込みます。
     
@@ -9,13 +10,15 @@ def read_ovf_file(filename):
     ----------
     filename : str
         読み込むOVFファイルの名前
+    output_mode : str, optional
+        出力モードを指定 ('headers' または 'both')。
+        デフォルトは 'both'。
     
     Returns
     -------
-    data : np.ndarray
-        読み込んだデータを格納したNumPy配列
-    headers : dict
-        ファイルから取得したヘッダー情報の辞書
+    tuple or dict
+        output_mode='headers' の場合、ヘッダー情報の辞書を返します。
+        output_mode='both' の場合、(データ, ヘッダー情報) のタプルを返します。
     """
     headers = {}
     data = None
@@ -33,8 +36,11 @@ def read_ovf_file(filename):
                     headers['znodes'] = int(line.split()[-1])
                 elif 'valuedim' in line:
                     headers['valuedim'] = int(line.split()[-1])
-                elif line.startswith('# Begin: Data'):
-                    data_format = line.split()[-1]
+                elif 'valuelabels' in line:
+                    headers['valuelabels'] = line.split()[-1]
+                elif line.lower().startswith('# begin: data'):
+                    data_format = line.lower().replace('# begin: data', '').strip()
+                    # print(data_format)
                     break  # データセクションに到達
             else:
                 raise ValueError("Unexpected file format.")
@@ -43,10 +49,14 @@ def read_ovf_file(filename):
         if not all(k in headers for k in ('xnodes', 'ynodes', 'znodes', 'valuedim')):
             raise ValueError("Incomplete header information.")
 
+        # output_mode が 'headers' の場合、ここで終了
+        if output_mode == 'headers':
+            return headers
+
         # データの読み込み
-        if data_format == '4':
+        if data_format == 'binary 4':
             data = read_binary_data(file, headers)
-        elif data_format == 'Text':
+        elif data_format == 'text':
             data = read_text_data(file, headers)
         else:
             raise ValueError(f"Unsupported data format: {data_format}")
@@ -88,11 +98,12 @@ def read_text_data(file, headers):
     # データを格納するためのNumPy配列を初期化
     data = np.empty((znodes, ynodes, xnodes, valuedim), dtype=np.float32)
 
+    line = file.readline().split()
+
     # データをテキスト形式で読み込み
     for z in range(znodes):
         for y in range(ynodes):
             for x in range(xnodes):
-                line = file.readline().strip().split()
                 data[z, y, x, :] = [float(val) for val in line[:valuedim]]
 
     return data
