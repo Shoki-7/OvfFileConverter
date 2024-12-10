@@ -2,17 +2,20 @@ import sys
 import ctypes
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QComboBox, QCheckBox, QGridLayout, QFileDialog
+    QLineEdit, QPushButton, QComboBox, QCheckBox, QGridLayout, QFileDialog, QGroupBox, QProgressBar
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QMetaObject, Q_ARG, pyqtSlot
+from PyQt5.QtGui import QIcon
+
+from concurrent.futures import ThreadPoolExecutor
+
 import read_ovf_files as rof
 import os
 import glob
-
 import numpy as np
-from PyQt5.QtGui import QImage, QPixmap
-import matplotlib.pyplot as plt
-from io import BytesIO
+
+import make_image as mi
+import colormap_stocks as cs
 
 try:
     import footer_widget as fw
@@ -31,7 +34,6 @@ def get_windows_display_scale():
 
 scale_factor = get_windows_display_scale()
 
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -40,8 +42,10 @@ class MainWindow(QMainWindow):
         window_width = int(1000 * scale_factor)
         window_height = int(800 * scale_factor)
 
-        self.setWindowTitle("Spin Wave Visualization Tool")
+        self.setWindowTitle("OVF Files Visualization Tool")
         self.setGeometry(100, 100, window_width, window_height)
+
+        is_debug = True
 
         # Set the style sheet for the main window
         font_size = f"{int(14 * scale_factor)}px"
@@ -119,8 +123,10 @@ class MainWindow(QMainWindow):
         # Input path (directory only)
         input_layout = QHBoxLayout()
         input_label = QLabel("Input Directory:")
-        # self.input_line = QLineEdit()
-        self.input_line = QLineEdit(os.path.join(os.getcwd(), "TestOvfFiles"))
+        if is_debug:
+            self.input_line = QLineEdit(os.path.join(os.getcwd(), "TestOvfFiles3"))
+        else:
+            self.input_line = QLineEdit()    
         input_browse = QPushButton("Browse")
         input_browse.setFixedSize(int(80 * scale_factor), int(30 * scale_factor))
         input_browse.clicked.connect(self.browse_input)
@@ -129,70 +135,464 @@ class MainWindow(QMainWindow):
         input_layout.addWidget(input_browse)
         layout.addLayout(input_layout)
 
-        # Grid size inputs with HTML-styled labels
-        grid_layout = QGridLayout()
-        labels = [
-            ("<i>N<sub>x</sub></i>:", "Size<i><sub>x</sub></i> (m):", "Output Format:"),
-            ("<i>N<sub>y</sub></i>:", "Size<i><sub>y</sub></i> (m):", "Graph X-Axis:"),
-            ("<i>N<sub>z</sub></i>:", "Size<i><sub>z</sub></i> (m):", "Graph Y-Axis:")
-        ]
-        grid_inputs = [
-            ("Nx", "Sizex", "Output Format"),
-            ("Ny", "Sizey", "Graph X-Axis"),
-            ("Nz", "Sizez", "Graph Y-Axis")
+        # Grid size inputs with HTML-styled labels (3x6 layout)
+        input_grid_layout = QGridLayout()
+
+        # 入力用
+        input_grid_data = [
+            # Row 0
+            ("<i>N<sub>x</sub></i> :", "Nx", "100"),
+            ("<i>N<sub>y</sub></i> :", "Ny", "100"),
+            ("<i>N<sub>z</sub></i> :", "Nz", "100"),
+
+            # Row 1
+            ("Size<i><sub>x</sub></i> (m) :", "Sizex", "200e-6"),
+            ("Size<i><sub>y</sub></i> (m) :", "Sizey", "200e-6"),
+            ("Size<i><sub>z</sub></i> (m) :", "Sizez", "40e-9"),
         ]
 
-        # 入力フィールドとコンボボックスの作成
         self.grid_inputs = {}
+
+        # 入力部分 (Row 0, Row 1)
+        for index, (label, key, placeholder) in enumerate(input_grid_data):
+            row = index // 3  # 行番号 (3列ごとに新しい行)
+            col = (index % 3) * 2  # 列番号 (ラベルと入力を2つの列で占有)
+
+            # ラベルの作成
+            lbl = QLabel(label)
+            lbl.setProperty("html", True)
+            input_grid_layout.addWidget(lbl, row, col)  # ラベルを配置
+
+            # テキスト入力フィールドを作成
+            input_field = QLineEdit()
+            if placeholder:
+                input_field.setPlaceholderText(placeholder)
+            self.grid_inputs[key] = input_field
+            input_grid_layout.addWidget(input_field, row, col + 1)  # 入力フィールドを配置
+        
+        layout.addLayout(input_grid_layout)
+
+
+        output_grid_layout = QGridLayout()
+
+        # 出力用
+        output_grid_data = [
+            # Row 2
+            ("Output Format :", "Output Format", None),
+            ("Graph X-Axis :", "Graph X-Axis", None),
+            ("Graph Y-Axis :", "Graph Y-Axis", None),
+            ("Plane index :", "Plane index", None)
+        ]
+
         self.axis_combos = []
-        for row, (label1, label2, label3) in enumerate(labels):
-            # 最初の列
-            lbl1 = QLabel(label1)
-            lbl1.setProperty("html", True)
-            input_field1 = QLineEdit()
-            self.grid_inputs[grid_inputs[row][0]] = input_field1
-            grid_layout.addWidget(lbl1, row, 0)
-            grid_layout.addWidget(input_field1, row, 1)
 
-            # 真ん中の列
-            lbl2 = QLabel(label2)
-            lbl2.setProperty("html", True)
-            input_field2 = QLineEdit()
-            self.grid_inputs[grid_inputs[row][1]] = input_field2
-            grid_layout.addWidget(lbl2, row, 2)
-            grid_layout.addWidget(input_field2, row, 3)
+        # 出力部分 (Row 2)
+        for index, (label, key, placeholder) in enumerate(output_grid_data):
+            row = index // 4  # 行番号 (3列ごとに新しい行)
+            col = (index % 4) * 2  # 列番号 (ラベルと入力を2つの列で占有)
 
-            # 最後の列
-            lbl3 = QLabel(label3)
+            # ラベルの作成
+            lbl = QLabel(label)
+            lbl.setProperty("html", True)
+            output_grid_layout.addWidget(lbl, row, col)  # ラベルを配置
+
+            # コンボボックスを作成
             combo = QComboBox()
-            if grid_inputs[row][2] == "Output Format":
-                combo.addItems(["mx", "my", "mz", "all"])
+            if key == "Output Format":
                 self.format_combo = combo
-            else:
+            elif key == "Graph X-Axis":
                 combo.addItems(["x", "y", "z"])
+                combo.setCurrentText("x")  # 初期値
                 self.axis_combos.append(combo)
+                # combo.currentIndexChanged.connect(lambda: self.update_axis_options("Graph X-Axis"))
+            elif key == "Graph Y-Axis":
+                combo.addItems(["x", "y", "z"])
+                combo.setCurrentText("y")  # 初期値
+                self.axis_combos.append(combo)
+                # combo.currentIndexChanged.connect(lambda: self.update_axis_options("Graph Y-Axis"))
+            elif key == "Plane index":
+                self.index_combo = combo
 
-                combo.currentIndexChanged.connect(self.check_axis_conflict)
-            grid_layout.addWidget(lbl3, row, 4)
-            grid_layout.addWidget(combo, row, 5)
+            output_grid_layout.addWidget(combo, row, col + 1)  # コンボボックスを配置
 
-        layout.addLayout(grid_layout)
+        layout.addLayout(output_grid_layout)
 
-        # Output plane
-        plane_layout = QHBoxLayout()
-        plane_label = QLabel("Output Plane (int):")
-        self.plane_line = QLineEdit()
-        plane_layout.addWidget(plane_label)
-        plane_layout.addWidget(self.plane_line)
-        layout.addLayout(plane_layout)
+        # Display options layout
+        display_grid_layout = QGridLayout()
 
-        # Display options
-        options_layout = QHBoxLayout()
-        self.axis_check = QCheckBox("Show Axis")
-        self.arrow_check = QCheckBox("Show Arrows")
-        options_layout.addWidget(self.axis_check)
-        options_layout.addWidget(self.arrow_check)
-        layout.addLayout(options_layout)
+        # Display option data
+        display_grid_data = [
+            # Row 4
+            ("Show Arrows :", "Show Arrows", None),
+            ("Show Axis :", "Show Axis", None),
+            ("<s>Log Scale<s> :", "is_LogScale", None),
+            ("Show Colorbar :", "Show Colorbar", None)
+        ]
+        
+        self.colormap_combo = None  # Initialize as None
+
+        # Display options (Row 4)
+        for index, (label, key, placeholder) in enumerate(display_grid_data):
+            row = index // 4  # 行番号 (3列ごとに新しい行)
+            col = (index % 4) * 2  # 列番号 (ラベルと入力を2つの列で占有)
+
+            # Create label
+            lbl = QLabel(label)
+            lbl.setProperty("html", True)
+            display_grid_layout.addWidget(lbl, row, col)  # Add label to the grid
+
+            # Create checkbox for Show Arrows and Show Axis
+            checkbox = QCheckBox()
+            self.grid_inputs[key] = checkbox
+            display_grid_layout.addWidget(checkbox, row, col + 1)  # Add checkbox to the grid
+
+        # Add the display options layout to the main layout
+        layout.addLayout(display_grid_layout)
+
+
+        # Colormap options layout
+        colormap_grid_layout = QGridLayout()
+
+        # Colormap option data
+        colormap_grid_data = [
+            ("Colormap :", "Colormap", None),
+            (", Reverse :", "is_Reverse", None),
+            (", Colormap range :", "Z-Axis Displayed range min", "-0.5"),
+            (" ≤ <i>z</i> ≤ ", "Z-Axis Displayed range max", "0.5")
+        ]
+        
+        self.colormap_combo = None  # Initialize as None
+
+        # Colormap options
+        for index, (label, key, placeholder) in enumerate(colormap_grid_data):
+            row = index // 4  # 行番号 (3列ごとに新しい行)
+            col = (index % 4) * 2  # 列番号 (ラベルと入力を2つの列で占有)
+
+            # Create label
+            lbl = QLabel(label)
+            lbl.setProperty("html", True)
+            if "≤ <i>" in label:
+                colormap_grid_layout.addWidget(lbl, row, col, Qt.AlignCenter)
+            else:
+                colormap_grid_layout.addWidget(lbl, row, col)
+
+            if key in ["is_Reverse"]:
+                # Create checkbox for Show Arrows and Show Axis
+                checkbox = QCheckBox()
+                self.grid_inputs[key] = checkbox
+                colormap_grid_layout.addWidget(checkbox, row, col + 1)  # Add checkbox to the grid
+            elif key == "Colormap":
+                # Create combo box for Colormap
+                combo = QComboBox()
+                self.colormap_combo = combo
+
+                # カラーバー画像を追加
+                for colormap_name, base64_data in cs.colormap_data.items():
+                    pixmap = cs.colormapFromBase64(base64_data)
+                    icon = QIcon(pixmap)
+                    self.colormap_combo.addItem(icon, colormap_name)  # アイコン付きアイテムとして追加
+
+                colormap_grid_layout.addWidget(combo, row, col + 1)  # Add combo box to the grid
+            else:
+                input_field = QLineEdit()
+                if placeholder:
+                    input_field.setPlaceholderText(placeholder)
+                self.grid_inputs[key] = input_field
+                colormap_grid_layout.addWidget(input_field, row, col + 1)
+
+        # Add the Colormap options layout to the main layout
+        layout.addLayout(colormap_grid_layout)
+
+        
+        # Axsis Setting
+        self.prefix_combos = []
+
+        # X-Axis用のグループボックスを作成
+        x_axis_group = QGroupBox("X-Axis")
+        x_axis_layout = QGridLayout()
+
+        # X-Axisの設定データ
+        x_axis_data = [
+            ("Overall range (m) :", "X-Axis Overall range min", "-100e-6"),
+            (" ≤ <i>x</i> ≤ ", "X-Axis Overall range max", "100e-6"),
+            (", Label :", "X-Axis Label", "Position $x$"),
+            (", Unit :", "X-Axis Unit", "m"),
+            (", SI prefix :", "X-Axis SI prefix", None),
+
+            ("Displayed range (m) :", "X-Axis Displayed range min", "-50e-6"),
+            (" ≤ <i>x</i> ≤ ", "X-Axis Displayed range max", "-50e-6"),
+            (", Tick Label :", "X-Axis Tick Label", "-60, -45, -30, -15, 0, 15, 30, 45, 60"),
+            (", Reverse :", "X-Axis Reverse", None)
+        ]
+
+        # X-Axisオプション
+        col_offset = 0
+        for index, (label, key, placeholder) in enumerate(x_axis_data):
+            row = index // 5
+            col = (index % 5) * 2 + col_offset
+
+            lbl = QLabel(label)
+            lbl.setProperty("html", True)
+            if "≤ <i>" in label:
+                x_axis_layout.addWidget(lbl, row, col, Qt.AlignCenter)
+            else:
+                x_axis_layout.addWidget(lbl, row, col)
+
+            if "prefix" in key:
+                combo = QComboBox()
+                combo.addItems(["Y", "Z", "E", "P", "T", "G", "M", "k", "h", "da", "", "d", "c", "m", "μ", "n", "p", "f", "a", "z", "y"])
+                combo.setCurrentText("")
+                self.prefix_combos.append(combo)
+                x_axis_layout.addWidget(combo, row, col + 1)
+            elif "Reverse" in key:
+                checkbox = QCheckBox()
+                self.grid_inputs[key] = checkbox
+                x_axis_layout.addWidget(checkbox, row, col + 1)  # Add
+            else:
+                input_field = QLineEdit()
+                if placeholder:
+                    input_field.setPlaceholderText(placeholder)
+                self.grid_inputs[key] = input_field
+                if "Tick Label" in key:
+                    x_axis_layout.addWidget(input_field, row, col + 1, 1, 3)
+                    col_offset = 2
+                else:
+                    x_axis_layout.addWidget(input_field, row, col + 1)
+
+        x_axis_group.setLayout(x_axis_layout)
+        layout.addWidget(x_axis_group)
+
+        # Y-Axis用のグループボックスを作成
+        y_axis_group = QGroupBox("Y-Axis")
+        y_axis_layout = QGridLayout()
+
+        # Y-Axisの設定データ
+        y_axis_data = [
+            ("Overall range (m) :", "Y-Axis Overall range min", "-100e-6"),
+            (" ≤ <i>y</i> ≤ ", "Y-Axis Overall range max", "100e-6"),
+            (", Label :", "Y-Axis Label", "Position $y$"),
+            (", Unit :", "Y-Axis Unit", "m"),
+            (", SI prefix :", "Y-Axis SI prefix", None),
+
+            ("Displayed range (m) :", "Y-Axis Displayed range min", "-50e-6"),
+            (" ≤ <i>y</i> ≤ ", "Y-Axis Displayed range max", "50e-6"),
+            (", Tick Label :", "Y-Axis Tick Label", "-60, -45, -30, -15, 0, 15, 30, 45, 60"),
+            (", Reverse :", "Y-Axis Reverse", None)
+        ]
+
+        # Y-Axisオプション
+        col_offset = 0
+        for index, (label, key, placeholder) in enumerate(y_axis_data):
+            row = index // 5
+            col = (index % 5) * 2 + col_offset
+
+            lbl = QLabel(label)
+            lbl.setProperty("html", True)
+            if "≤ <i>" in label:
+                y_axis_layout.addWidget(lbl, row, col, Qt.AlignCenter)
+            else:
+                y_axis_layout.addWidget(lbl, row, col)
+
+            if "prefix" in key:
+                combo = QComboBox()
+                combo.addItems(["Y", "Z", "E", "P", "T", "G", "M", "k", "h", "da", "", "d", "c", "m", "μ", "n", "p", "f", "a", "z", "y"])
+                combo.setCurrentText("")
+                self.prefix_combos.append(combo)
+                y_axis_layout.addWidget(combo, row, col + 1)
+            elif "Reverse" in key:
+                checkbox = QCheckBox()
+                self.grid_inputs[key] = checkbox
+                y_axis_layout.addWidget(checkbox, row, col + 1)  # Add
+            else:
+                input_field = QLineEdit()
+                if placeholder:
+                    input_field.setPlaceholderText(placeholder)
+                self.grid_inputs[key] = input_field
+                if "Tick Label" in key:
+                    y_axis_layout.addWidget(input_field, row, col + 1, 1, 3)
+                    col_offset = 2
+                else:
+                    y_axis_layout.addWidget(input_field, row, col + 1)
+
+        y_axis_group.setLayout(y_axis_layout)
+        layout.addWidget(y_axis_group)
+        
+
+        # Graph setting用のグループボックスを作成
+        graph_setting_group = QGroupBox("Graph settings")
+
+        # Graph setting layout
+        graph_setting_grid_layout = QGridLayout()
+
+        # Graph setting data
+        graph_setting_grid_data = [
+            ("Left (inch) :", "Left", "0.7"),
+            (", Top (inch) :", "Top", "0.5"),
+            (", Right (inch) :", "Right", "0.7"),
+            (", Bottom (inch) :", "Bottom", "0.5"),
+
+            ("Label font size :", "Label font size", "11"),
+            (", Label padding : ", "Label padding", "4"),
+            (", Tick label font size :", "Tick label font size", "10"),
+            (", Tick label padding :", "Tick label padding", "4"),
+
+            ("Aspect ratio :", "Aspect ratio width", "1"),
+            (" : ", "Aspect ratio height", "1")
+        ]
+
+        # Graph setting
+        for index, (label, key, placeholder) in enumerate(graph_setting_grid_data):
+            row = index // 4  # 行番号 (3列ごとに新しい行)
+            col = (index % 4) * 2  # 列番号 (ラベルと入力を2つの列で占有)
+
+            # Create label
+            lbl = QLabel(label)
+            lbl.setProperty("html", True)
+            graph_setting_grid_layout.addWidget(lbl, row, col)  # Add label to the grid
+
+            input_field = QLineEdit()
+            if placeholder:
+                input_field.setPlaceholderText(placeholder)
+            self.grid_inputs[key] = input_field
+            graph_setting_grid_layout.addWidget(input_field, row, col + 1)  # 入力フィールドを配置
+
+            if "padding" in key:
+                input_field.editingFinished.connect(lambda field=input_field: self.validate_input(field, 1.0))
+            else:
+                input_field.editingFinished.connect(lambda field=input_field: self.validate_input(field, 0))
+
+        graph_setting_group.setLayout(graph_setting_grid_layout)
+        layout.addWidget(graph_setting_group)
+
+
+        # Z-Axis用のグループボックスを作成
+        z_axis_group = QGroupBox("Z-Axis")
+        z_axis_layout = QVBoxLayout()  # 縦方向にレイアウト
+
+        # Z-Axisの設定データ
+        z_axis_data = [
+            ("Label :", "Z-Axis Label", "Intensity"),
+            (", Unit :", "Z-Axis Unit", "a.u."),
+            (", SI prefix :", "Z-Axis SI prefix", None),
+            (", Tick Label :", "Z-Axis Tick Label", "-0.5, -0.25, 0, 0.25, 0.5")
+        ]
+
+        # Z-Axisの設定を配置するグリッド
+        z_axis_grid_layout = QGridLayout()
+
+        # Z-Axisオプション
+        for index, (label, key, placeholder) in enumerate(z_axis_data):
+            row = index // 4
+            col = (index % 4) * 2
+
+            lbl = QLabel(label)
+            lbl.setProperty("html", True)
+            z_axis_grid_layout.addWidget(lbl, row, col)
+
+            if "prefix" in key:
+                combo = QComboBox()
+                combo.addItems(["Y", "Z", "E", "P", "T", "G", "M", "k", "h", "da", "", "d", "c", "m", "μ", "n", "p", "f", "a", "z", "y"])
+                combo.setCurrentText("")
+                self.prefix_combos.append(combo)
+                z_axis_grid_layout.addWidget(combo, row, col + 1)
+            elif key == "":
+                continue
+            else:
+                input_field = QLineEdit()
+                if placeholder:
+                    input_field.setPlaceholderText(placeholder)
+                self.grid_inputs[key] = input_field
+                z_axis_grid_layout.addWidget(input_field, row, col + 1)
+
+        # Z-AxisのグリッドレイアウトをZ-Axisのメインレイアウトに追加
+        z_axis_layout.addLayout(z_axis_grid_layout)
+        
+        # Colorbar Sizeレイアウト
+        colorbar_grid_layout = QGridLayout()
+
+        # Colorbar Size option data
+        colorbar_grid_data = [
+            ("Colorbar Width (inch) :", "Colorbar Width", "0.15"),
+            (", Between Graph and Colorbar (inch) :", "Between Graph and Colorbar", "0.1")
+        ]
+
+        # Colorbar Size options
+        for index, (label, key, placeholder) in enumerate(colorbar_grid_data):
+            row = index // 2  # 行番号 (2列ごとに新しい行)
+            col = (index % 2) * 2  # 列番号 (ラベルと入力を2つの列で占有)
+
+            # Create label
+            lbl = QLabel(label)
+            lbl.setProperty("html", True)
+            colorbar_grid_layout.addWidget(lbl, row, col)  # Add label to the grid
+
+            input_field = QLineEdit()
+            if placeholder:
+                input_field.setPlaceholderText(placeholder)
+            self.grid_inputs[key] = input_field
+            colorbar_grid_layout.addWidget(input_field, row, col + 1)  # 入力フィールドを配置
+
+        # Colorbar SizeのグリッドレイアウトをZ-Axisのメインレイアウトに追加
+        z_axis_layout.addLayout(colorbar_grid_layout)
+
+        # レイアウトをZ-Axisグループボックスに設定
+        z_axis_group.setLayout(z_axis_layout)
+
+        # メインレイアウトにZ-Axisグループボックスを追加
+        layout.addWidget(z_axis_group)
+
+
+        # Save setting layout
+        save_setting_grid_layout = QGridLayout()
+
+        # Save setting data
+        save_setting_grid_data = [
+            ("Extension :", "Extension", None),
+            (", GIF animation speed (ms) :", "GIF animation speed", "200")
+        ]
+
+        # Save setting
+        for index, (label, key, placeholder) in enumerate(save_setting_grid_data):
+            row = index // 2  # 行番号 (3列ごとに新しい行)
+            col = (index % 2) * 2  # 列番号 (ラベルと入力を2つの列で占有)
+
+            # Create label
+            lbl = QLabel(label)
+            lbl.setProperty("html", True)
+            save_setting_grid_layout.addWidget(lbl, row, col)  # Add label to the grid
+
+            if key in ["Extension"]:
+                combo = QComboBox()
+                combo.addItems(["png", "jpg", "svg", "eps", "pdf", "gif"])  # Extensionの選択肢を追加
+                self.grid_inputs[key] = combo
+                save_setting_grid_layout.addWidget(combo, row, col + 1)  # コンボボックスを配置
+            else:
+                input_field = QLineEdit()
+                if placeholder:
+                    input_field.setPlaceholderText(placeholder)
+                self.grid_inputs[key] = input_field
+                save_setting_grid_layout.addWidget(input_field, row, col + 1)  # 入力フィールドを配置
+
+        # Add the Save setting layout to the main layout
+        layout.addLayout(save_setting_grid_layout)
+
+
+        # OVFファイル選択用レイアウトを追加
+        ovf_file_layout = QHBoxLayout()
+
+        # ラベルを作成
+        ovf_file_label = QLabel("Displayed OVF File:")
+        ovf_file_layout.addWidget(ovf_file_label)
+
+        # OVFファイルコンボボックスを作成
+        self.ovf_file_combo = QComboBox()
+        self.ovf_file_combo.addItem("No OVF files found")  # 初期状態
+        self.ovf_file_combo.setEnabled(False)  # ディレクトリが未設定の場合は無効化
+        ovf_file_layout.addWidget(self.ovf_file_combo)
+
+        # レイアウトをメインレイアウトに追加
+        layout.addLayout(ovf_file_layout)
+
 
         # Graph display area
         self.graph_display = QLabel()
@@ -207,7 +607,14 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(self.check_button)
         button_layout.addWidget(self.output_button)
         layout.addLayout(button_layout)
-        self.output_button.clicked.connect(self.print_variables)
+        self.check_button.clicked.connect(self.show_images)
+        self.output_button.clicked.connect(self.save_images)
+
+        # Add the progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.hide()
+        layout.addWidget(self.progress_bar)
 
         if footer_available:
             footer_widget, self.footer_label = fw.create_footer_widget(footer_font_color, footer_font_size, footer_background_color, scale_factor)
@@ -234,15 +641,59 @@ class MainWindow(QMainWindow):
         
         # initialize
         self.update_N(self.input_line.text())
+        self.update_axis_options("Graph X-Axis")
+        self.update_axis_options("Graph Y-Axis")
+        self.update_axis_label()
+        self.update_axis_unit()
+        self.update_margin()
+        self.update_graph_font_size()
+
+        if is_debug:
+            self.update_output_format_options(self.get_first_ovf_file_header( self.input_line.text()))
+            self.update_plane_index_options()
+            self.update_ovf_file_combo(self.input_line.text())
+            self.update_sixe()
+            self.update_overall_range_by_size("x")
+            self.update_overall_range_by_size("y")
+            self.update_overall_range_by_size("z")
 
         # Connect singals for automatic updates
-        self.input_line.editingFinished.connect(lambda: (self.update_N(self.input_line.text())))
+        self.input_line.editingFinished.connect(lambda: (self.update_N(self.input_line.text()), self.update_footer_by_input_line(self.input_line.text()), self.update_output_format_options(self.get_first_ovf_file_header( self.input_line.text())), self.update_plane_index_options(), self.update_ovf_file_combo(self.input_line.text())))
+
+        self.grid_inputs["Sizex"].editingFinished.connect(lambda: self.update_overall_range_by_size("x"))
+        self.grid_inputs["Sizey"].editingFinished.connect(lambda: self.update_overall_range_by_size("y"))
+        self.grid_inputs["Sizez"].editingFinished.connect(lambda: self.update_overall_range_by_size("z"))
+
+        for i, combo in enumerate(self.axis_combos):
+            if i == 0:
+                combo.currentIndexChanged.connect(lambda: (self.update_axis_options("Graph X-Axis"), self.update_overall_range_by_graph_axis("X")))
+            else:
+                combo.currentIndexChanged.connect(lambda: (self.update_axis_options("Graph Y-Axis"), self.update_overall_range_by_graph_axis("Y")))
+            combo.currentIndexChanged.connect(lambda: self.update_plane_index_options())
+    
+    def update_footer_by_input_line(self, directory):
+        ovf_file_path_arr = glob.glob(os.path.join(directory, "*.ovf")) if not len(directory) == 0 else []
+        if ovf_file_path_arr:
+            self.footer_label.setText(f"{len(ovf_file_path_arr)} OVF files found in the selected directory.")
+        else:
+            self.footer_label.setText("No OVF files found in the selected directory.")
+    
+    def get_first_ovf_file_header(self, directory):
+        ovf_file_path_arr = glob.glob(os.path.join(directory, "*.ovf")) if not len(directory) == 0 else []
+        header = {}
+        if ovf_file_path_arr:
+            try:
+                # 最初の OVF ファイルのヘッダーを読み取る
+                header = rof.read_ovf_file(ovf_file_path_arr[0], output_mode='headers')
+            except Exception as e:
+                print("Error reading OVF file:", e)
+        print("get_first_ovf_file_header - header :", header)
+        return header
     
     def update_N(self, directory):
         # OVF ファイルを取得
         ovf_file_path_arr = glob.glob(os.path.join(directory, "*.ovf")) if not len(directory) == 0 else []
         if ovf_file_path_arr:
-            self.footer_label.setText(f"{len(ovf_file_path_arr)} OVF files found in the selected directory.")
             try:
                 # 最初の OVF ファイルのヘッダーを読み取る
                 headers = rof.read_ovf_file(ovf_file_path_arr[0], output_mode='headers')
@@ -256,24 +707,231 @@ class MainWindow(QMainWindow):
                 print("Error reading OVF file:", e)
 
         else:
-            self.footer_label.setText("No OVF files found in the selected directory.")
             self.grid_inputs["Nx"].setText("")
             self.grid_inputs["Ny"].setText("")
             self.grid_inputs["Nz"].setText("")
+    
+    def update_axis_options(self, changed_axis):
+        """
+        Updates the available options for Graph X-Axis and Graph Y-Axis
+        to ensure they do not share the same value.
+        """
+        # Get current values
+        x_axis_value = self.axis_combos[0].currentText()
+        y_axis_value = self.axis_combos[1].currentText()
+
+        # Available options
+        options = ["x", "y", "z"]
+
+        # Block signals to avoid infinite recursion
+        self.axis_combos[0].blockSignals(True)
+        self.axis_combos[1].blockSignals(True)
+
+        try:
+            if changed_axis == "Graph X-Axis":
+                # Update Y-Axis options
+                current_y_value = self.axis_combos[1].currentText()
+                self.axis_combos[1].clear()  # Y-Axisの選択肢をリセット
+                for option in options:
+                    if option != x_axis_value:  # X-Axisの値を除外
+                        self.axis_combos[1].addItem(option)
+                if current_y_value in options and current_y_value != x_axis_value:
+                    self.axis_combos[1].setCurrentText(current_y_value)
+            elif changed_axis == "Graph Y-Axis":
+                # Update X-Axis options
+                current_x_value = self.axis_combos[0].currentText()
+                self.axis_combos[0].clear()  # X-Axisの選択肢をリセット
+                for option in options:
+                    if option != y_axis_value:  # Y-Axisの値を除外
+                        self.axis_combos[0].addItem(option)
+                if current_x_value in options and current_x_value != y_axis_value:
+                    self.axis_combos[0].setCurrentText(current_x_value)
+        finally:
+            # Restore signal handling
+            self.axis_combos[0].blockSignals(False)
+            self.axis_combos[1].blockSignals(False)
+    
+    def update_plane_index_options(self):
+        """
+        Updates the available options for Plane index based on Graph X-Axis and Graph Y-Axis.
+        The Plane index corresponds to the axis not selected in Graph X-Axis and Graph Y-Axis,
+        ranging from 0 to N-1 where N is the number of nodes along that axis.
+        """
+
+        current_plane_index = int(self.index_combo.currentText()) if self.index_combo.currentText().isdigit() else float('nan')
+
+        # Get the currently selected axes
+        x_axis = self.axis_combos[0].currentText()  # Graph X-Axis
+        y_axis = self.axis_combos[1].currentText()  # Graph Y-Axis
+
+        # Determine the unused axis
+        all_axes = ["x", "y", "z"]
+        unused_axis = next(axis for axis in all_axes if axis not in [x_axis, y_axis])
+
+        # Determine the range for the unused axis
+        if unused_axis == "x":
+            max_index = int(self.grid_inputs["Nx"].text()) if self.grid_inputs["Nx"].text().isdigit() else 0
+        elif unused_axis == "y":
+            max_index = int(self.grid_inputs["Ny"].text()) if self.grid_inputs["Ny"].text().isdigit() else 0
+        elif unused_axis == "z":
+            max_index = int(self.grid_inputs["Nz"].text()) if self.grid_inputs["Nz"].text().isdigit() else 0
+        else:
+            max_index = 0  # Default fallback
+
+        # Update the Plane index combo box
+        self.index_combo.clear()
+        self.index_combo.addItems([str(i) for i in range(max_index)])
+
+        # Optionally, set a default value
+        if current_plane_index < max_index:
+            self.index_combo.setCurrentIndex(current_plane_index)
+        elif max_index >= 0:
+            self.index_combo.setCurrentIndex(0)
+    
+    def update_output_format_options(self, header):
+        """
+        Updates the available options for the Output Format combo box
+        based on the provided value.
+
+        Parameters:
+        - value (int): Determines the available options for Output Format.
+        """
+        # Clear existing options
+        self.format_combo.clear()
+
+        try:
+            valuedim = header["valuedim"]
+        except KeyError:
+            valuedim = None
+
+        # Define options based on the value
+        if valuedim == 3:
+            options = ["m", "m_x", "m_y", "m_z"]
+        elif valuedim == 1:
+            try:
+                option_item = header["valuelabels"]
+            except KeyError:
+                option_item = "any"
+            options = [option_item]
+        else:
+            options = ["invalid"]  # Handle unexpected values (example)
+
+        # Add new options to the combo box
+        self.format_combo.addItems(options)
+
+        # Set default selection
+        self.format_combo.setCurrentText(options[0])
+
+    def update_ovf_file_combo(self, directory):
+        """
+        Updates the OVF file combo box with the OVF files in the specified directory.
+
+        Parameters:
+        - directory (str): Path to the directory to search for OVF files.
+        """
+        # OVFファイルを取得
+        ovf_file_paths = glob.glob(os.path.join(directory, "*.ovf"))
+
+        # コンボボックスをリセット
+        self.ovf_file_combo.clear()
+
+        if ovf_file_paths:
+            # ファイル名を取得してコンボボックスに追加
+            ovf_file_names = [os.path.basename(path) for path in ovf_file_paths]
+            self.ovf_file_combo.addItems(ovf_file_names)
+            self.ovf_file_combo.setEnabled(True)  # コンボボックスを有効化
+        else:
+            # OVFファイルが見つからない場合
+            self.ovf_file_combo.addItem("No OVF files found")
+            self.ovf_file_combo.setEnabled(False)  # コンボボックスを無効化
+    
+    def update_axis_label(self):
+        # Get the currently selected axes
+        x_axis = self.axis_combos[0].currentText()  # Graph X-Axis
+        y_axis = self.axis_combos[1].currentText()  # Graph Y-Axis
+
+        self.grid_inputs["X-Axis Label"].setText(f"Position ${x_axis}$")
+        self.grid_inputs["Y-Axis Label"].setText(f"Position ${y_axis}$")
+        self.grid_inputs["Z-Axis Label"].setText("Intensity")
+    
+    def update_axis_unit(self):
+        self.grid_inputs["X-Axis Unit"].setText("m")
+        self.grid_inputs["Y-Axis Unit"].setText("m")
+        self.grid_inputs["Z-Axis Unit"].setText("a.u.")
+    
+    def update_margin(self):
+        self.grid_inputs["Left"].setText("0.7")
+        self.grid_inputs["Top"].setText("0.5")
+        self.grid_inputs["Right"].setText("0.7")
+        self.grid_inputs["Bottom"].setText("0.5")
+        self.grid_inputs["Colorbar Width"].setText("0.15")
+        self.grid_inputs["Between Graph and Colorbar"].setText("0.1")
+    
+    def update_overall_range_by_size(self, changed_size_axis):
+        graph_x_axis = self.axis_combos[0].currentText()
+        graph_y_axis = self.axis_combos[1].currentText()
+        set_axis = "X" if changed_size_axis == graph_x_axis else "Y"
+        try:
+            if changed_size_axis in (graph_x_axis, graph_y_axis):
+                changed_size = float(self.grid_inputs["Size" + changed_size_axis].text())
+                self.grid_inputs[set_axis + "-Axis Overall range min"].setText("0")
+                self.grid_inputs[set_axis + "-Axis Overall range max"].setText(str(changed_size))
+        except ValueError:
+            self.grid_inputs[set_axis + "-Axis Overall range min"].setText("")
+            self.grid_inputs[set_axis + "-Axis Overall range max"].setText("")
+    
+    def update_overall_range_by_graph_axis(self, changed_axis):
+        try:
+            combo_idx = {"X" : 0, "Y" : 1}[changed_axis]
+            graph_axis = self.axis_combos[combo_idx].currentText()
+            size = float(self.grid_inputs["Size" + graph_axis].text())
+            self.grid_inputs[changed_axis + "-Axis Overall range min"].setText("0")
+            self.grid_inputs[changed_axis + "-Axis Overall range max"].setText(str(size))
+        except ValueError:
+            self.grid_inputs[changed_axis + "-Axis Overall range min"].setText("")
+            self.grid_inputs[changed_axis + "-Axis Overall range max"].setText("")
+    
+    def update_graph_font_size(self):
+        self.grid_inputs["Label font size"].setText("11")
+        self.grid_inputs["Label padding"].setText("4")
+        self.grid_inputs["Tick label font size"].setText("10")
+        self.grid_inputs["Tick label padding"].setText("4")
+    
+    def validate_input(self, input_field, min_value):
+        value = input_field.text()
+        try:
+            # 値が空または min_value 未満ならリセット
+            if value == "" or float(value) < min_value:
+                input_field.setText(f"{min_value:.2f}")  # 最小値にリセット
+        except ValueError:
+            # 入力が数値でない場合もリセット
+            input_field.setText(f"{min_value:.2f}")
+
+    # debug
+    def update_sixe(self):
+        self.grid_inputs["Sizex"].setText("120e-6")
+        self.grid_inputs["Sizey"].setText("90e-6")
+        self.grid_inputs["Sizez"].setText("300e-9")
 
     def browse_input(self):
         directory = QFileDialog.getExistingDirectory(self, "Select Directory")
         if directory:
             self.input_line.setText(directory)
+            self.update_footer_by_input_line(directory)
             self.update_N(directory)
-            
-    def check_axis_conflict(self):
-        if len(self.axis_combos) < 2:
-            return
-        if self.axis_combos[0].currentText() == self.axis_combos[1].currentText():
-            self.axis_combos[1].setStyleSheet(f"border: {self.conflict_border_width} solid {self.conflict_border_color};")
-        else:
-            self.axis_combos[1].setStyleSheet("")
+            self.update_output_format_options(self.get_first_ovf_file_header(directory))
+            self.update_plane_index_options()
+            self.update_ovf_file_combo(directory)
+    
+    @pyqtSlot()
+    def disable_inputs(self):
+        for widget in self.findChildren((QLineEdit, QPushButton, QComboBox, QCheckBox)):
+            widget.setEnabled(False)
+
+    @pyqtSlot()
+    def enable_inputs(self):
+        for widget in self.findChildren((QLineEdit, QPushButton, QComboBox, QCheckBox)):
+            widget.setEnabled(True)
 
     def get_variables(self):
         try:
@@ -282,111 +940,222 @@ class MainWindow(QMainWindow):
                 "Nx": int(self.grid_inputs["Nx"].text()) if self.grid_inputs["Nx"].text().isdigit() else float('nan'),
                 "Ny": int(self.grid_inputs["Ny"].text()) if self.grid_inputs["Ny"].text().isdigit() else float('nan'),
                 "Nz": int(self.grid_inputs["Nz"].text()) if self.grid_inputs["Nz"].text().isdigit() else float('nan'),
-                "Output Plane": int(self.plane_line.text()) if self.plane_line.text().isdigit() else float('nan'),
+                "Plane index": int(self.index_combo.currentText()) if self.index_combo.currentText().isdigit() else float('nan'),
 
                 # float 型の変数
-                "Sizex": float(self.grid_inputs["Sizex"].text()) if self.grid_inputs["Sizex"].text() else float('nan'),
-                "Sizey": float(self.grid_inputs["Sizey"].text()) if self.grid_inputs["Sizey"].text() else float('nan'),
-                "Sizez": float(self.grid_inputs["Sizez"].text()) if self.grid_inputs["Sizez"].text() else float('nan'),
+                "Sizex": float(self.grid_inputs["Sizex"].text()) if self.grid_inputs["Sizex"].text() else None,
+                "Sizey": float(self.grid_inputs["Sizey"].text()) if self.grid_inputs["Sizey"].text() else None,
+                "Sizez": float(self.grid_inputs["Sizez"].text()) if self.grid_inputs["Sizez"].text() else None,
+                "Left": float(self.grid_inputs["Left"].text()) if self.grid_inputs["Left"].text() else float('nan'),
+                "Top": float(self.grid_inputs["Top"].text()) if self.grid_inputs["Top"].text() else float('nan'),
+                "Right": float(self.grid_inputs["Right"].text()) if self.grid_inputs["Right"].text() else float('nan'),
+                "Bottom": float(self.grid_inputs["Bottom"].text()) if self.grid_inputs["Bottom"].text() else float('nan'),
+                "Colorbar Width": float(self.grid_inputs["Colorbar Width"].text()) if self.grid_inputs["Colorbar Width"].text() else float('nan'),
+                "Between Graph and Colorbar": float(self.grid_inputs["Between Graph and Colorbar"].text()) if self.grid_inputs["Between Graph and Colorbar"].text() else float('nan'),
+                "X-Axis Overall range min": float(self.grid_inputs["X-Axis Overall range min"].text()) if self.grid_inputs["X-Axis Overall range min"].text() else None,
+                "X-Axis Overall range max": float(self.grid_inputs["X-Axis Overall range max"].text()) if self.grid_inputs["X-Axis Overall range max"].text() else None,
+                "X-Axis Displayed range min": float(self.grid_inputs["X-Axis Displayed range min"].text()) if self.grid_inputs["X-Axis Displayed range min"].text() else None,
+                "X-Axis Displayed range max": float(self.grid_inputs["X-Axis Displayed range max"].text()) if self.grid_inputs["X-Axis Displayed range max"].text() else None,
+                "Y-Axis Overall range min": float(self.grid_inputs["Y-Axis Overall range min"].text()) if self.grid_inputs["Y-Axis Overall range min"].text() else None,
+                "Y-Axis Overall range max": float(self.grid_inputs["Y-Axis Overall range max"].text()) if self.grid_inputs["Y-Axis Overall range max"].text() else None,
+                "Y-Axis Displayed range min": float(self.grid_inputs["Y-Axis Displayed range min"].text()) if self.grid_inputs["Y-Axis Displayed range min"].text() else None,
+                "Y-Axis Displayed range max": float(self.grid_inputs["Y-Axis Displayed range max"].text()) if self.grid_inputs["Y-Axis Displayed range max"].text() else None,
+                "Z-Axis Displayed range min": float(self.grid_inputs["Z-Axis Displayed range min"].text()) if self.grid_inputs["Z-Axis Displayed range min"].text() else None,
+                "Z-Axis Displayed range max": float(self.grid_inputs["Z-Axis Displayed range max"].text()) if self.grid_inputs["Z-Axis Displayed range max"].text() else None,
+                "Aspect ratio width": float(self.grid_inputs["Aspect ratio width"].text()) if self.grid_inputs["Aspect ratio width"].text() else None,
+                "Aspect ratio height": float(self.grid_inputs["Aspect ratio height"].text()) if self.grid_inputs["Aspect ratio height"].text() else None,
+                "GIF animation speed": float(self.grid_inputs["GIF animation speed"].text()) if self.grid_inputs["GIF animation speed"].text() else None,
+                "Label font size": float(self.grid_inputs["Label font size"].text()) if self.grid_inputs["Label font size"].text() else None,
+                "Label padding": float(self.grid_inputs["Label padding"].text()) if self.grid_inputs["Label padding"].text() else None,
+                "Tick label font size": float(self.grid_inputs["Tick label font size"].text()) if self.grid_inputs["Tick label font size"].text() else None,
+                "Tick label padding": float(self.grid_inputs["Tick label padding"].text()) if self.grid_inputs["Tick label padding"].text() else None,
 
                 # str 型の変数
                 "Input Directory": self.input_line.text(),
                 "Output Format": self.format_combo.currentText(),
                 "Graph X-Axis": self.axis_combos[0].currentText(),
                 "Graph Y-Axis": self.axis_combos[1].currentText(),
+                "Colormap": self.colormap_combo.currentText(),
+                "Displayed OVF File": self.ovf_file_combo.currentText(),
+                "X-Axis Label": self.grid_inputs["X-Axis Label"].text(),
+                "X-Axis Unit": self.grid_inputs["X-Axis Unit"].text(),
+                "X-Axis SI prefix": self.prefix_combos[0].currentText(),
+                "Y-Axis Label": self.grid_inputs["Y-Axis Label"].text(),
+                "Y-Axis Unit": self.grid_inputs["Y-Axis Unit"].text(),
+                "Y-Axis SI prefix": self.prefix_combos[1].currentText(),
+                "Z-Axis Label": self.grid_inputs["Z-Axis Label"].text(),
+                "Z-Axis Unit": self.grid_inputs["Z-Axis Unit"].text(),
+                "Z-Axis SI prefix": self.prefix_combos[2].currentText(),
+                "Extension": self.grid_inputs["Extension"].currentText(),
+                "X-Axis Tick Label": self.grid_inputs["X-Axis Tick Label"].text(),
+                "Y-Axis Tick Label": self.grid_inputs["Y-Axis Tick Label"].text(),
+                "Z-Axis Tick Label": self.grid_inputs["Z-Axis Tick Label"].text(),
 
                 # bool 型の変数
-                "Show Axis": self.axis_check.isChecked(),
-                "Show Arrows": self.arrow_check.isChecked(),
+                "Show Axis": self.grid_inputs["Show Axis"].isChecked(),
+                "Show Arrows": self.grid_inputs["Show Arrows"].isChecked(),
+                "Show Colorbar": self.grid_inputs["Show Colorbar"].isChecked(),
+                "is_LogScale": self.grid_inputs["is_LogScale"].isChecked(),
+                "is_Reverse": self.grid_inputs["is_Reverse"].isChecked(),"X-Axis Reverse": self.grid_inputs["X-Axis Reverse"].isChecked(),
+                "Y-Axis Reverse": self.grid_inputs["Y-Axis Reverse"].isChecked()
             }
         except ValueError:
-            variables = {key: float('nan') for key in ["Nx", "Ny", "Nz", "Output Plane", "Sizex", "Sizey", "Sizez"]}
+            variables = {key: float('nan') for key in ["Nx", "Ny", "Nz", "Plane index", "Sizex", "Sizey", "Sizez"]}
+
+        print("get_variables - variables :", variables)
+
         return variables
 
-    def display_array_as_image(self, array):
-        """Convert a 2D array to an image and display it on graph_display."""
-        if array.ndim != 2:
-            raise ValueError("Only 2D arrays are supported for display.")
-
-        # # 正規化: 画像データを0～255にスケール変換
-        # normalized_array = 255 * (array - np.min(array)) / (np.max(array) - np.min(array))
-        # normalized_array = normalized_array.astype(np.uint8)
-
-        # # NumPy 配列を QImage に変換
-        # height, width = normalized_array.shape
-        # image = QImage(normalized_array, width, height, QImage.Format_Grayscale8)
-
-        # # QImage を QPixmap に変換
-        # pixmap = QPixmap.fromImage(image)
-
-        # # QLabel (graph_display) のサイズに合わせてリサイズ
-        # label_width = self.graph_display.width()
-        # label_height = self.graph_display.height()
-        # scaled_pixmap = pixmap.scaled(label_width, label_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-
-        # self.graph_display.setPixmap(scaled_pixmap)
-
-        # Matplotlib を使って画像を作成
-        fig, ax = plt.subplots()
-        cax = ax.imshow(array, cmap="viridis", aspect="auto")
-        fig.colorbar(cax, ax=ax)
-        ax.set_xlabel("X-axis")
-        ax.set_ylabel("Y-axis")
-
-        # MatplotlibのプロットをQPixmapに変換
-        buf = BytesIO()
-        plt.savefig(buf, format="png")
-        buf.seek(0)
-        plt.close(fig)
-
-        pixmap = QPixmap()
-        pixmap.loadFromData(buf.getvalue(), "PNG")
-
-        # QLabel (graph_display) のサイズに合わせてリサイズ
-        label_width = self.graph_display.width()
-        label_height = self.graph_display.height()
-        scaled_pixmap = pixmap.scaled(label_width, label_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-
-        # QPixmap を QLabel に表示
-        self.graph_display.setPixmap(scaled_pixmap)
-    
-    def print_variables(self):
+    def show_images(self):
         variables = self.get_variables()
 
-        # 辞書を整形してコンソールに出力
-        print("Variables:")
-        for key, value in variables.items():
-            print(f"  {key}: {value}")
+        # ThreadPoolExecutorを利用して非同期処理を開始
+        self.executor = ThreadPoolExecutor(max_workers=1)  # スレッド数1
+        self.executor.submit(self.show_images_task, variables)
 
+    def show_images_task(self, variables):
+        QMetaObject.invokeMethod(self, "disable_inputs", Qt.QueuedConnection)
+        
+        try:
+            ovf_file_path = os.path.join(variables["Input Directory"], variables["Displayed OVF File"])
 
-        # Get a list of all OVF files in the directory
+            # OVFファイルの読み込み
+            data, header = rof.read_ovf_file(ovf_file_path, output_mode='both')
+            print("show_images - data.shape :", data.shape)
+
+            # 配列の取得と処理
+            array = self.get_array(data, header, variables)
+            print("show_images - array.shape :", array.shape)
+            
+            if array.ndim != 2:
+                raise ValueError("Only 2D arrays are supported for display.")
+
+            # 画像生成
+            scaled_pixmap = mi.make_image(self, array, variables, mode="check")
+
+            # 最大値と最小値を取得
+            max_intensity = np.max(array)
+            min_intensity = np.min(array)
+            max_str = f"{max_intensity:.2e}"
+            min_str = f"{min_intensity:.2e}"
+
+            QMetaObject.invokeMethod(self.footer_label, "setText", Q_ARG(str, f"Maximum intensity: {max_str}, Minimum intensity: {min_str} in the selected file."))
+
+            # QMetaObject.invokeMethod(self.graph_display, "setPixmap", scaled_pixmap)
+            self.update_image_display(scaled_pixmap)
+
+        except Exception as e:
+            QMetaObject.invokeMethod(self.footer_label, f"Error: {str(e)}")
+        finally:
+            QMetaObject.invokeMethod(self, "enable_inputs", Qt.QueuedConnection)
+
+    @pyqtSlot(object)
+    def update_image_display(self, pixmap):
+        if pixmap is not None:
+            self.graph_display.setPixmap(pixmap)
+
+    def save_images(self):
+        variables = self.get_variables()
+
+        # ThreadPoolExecutorを利用して非同期処理を開始
+        self.executor = ThreadPoolExecutor(max_workers=1)  # スレッド数1
+        self.executor.submit(self.save_images_task, variables)
+
+    def save_images_task(self, variables):
+        QMetaObject.invokeMethod(self, "disable_inputs")
+        QMetaObject.invokeMethod(self.progress_bar, "show")
+        QMetaObject.invokeMethod(self.progress_bar, "setValue", Q_ARG(int, 0))
+
         ovf_file_path_arr = glob.glob(os.path.join(variables["Input Directory"], "*.ovf"))
+        total_steps = len(ovf_file_path_arr)
 
-        data, _ = rof.read_ovf_file(ovf_file_path_arr[0], output_mode='both')
-        print("Data shape:", data.shape)
+        if variables["Extension"] == "gif":
+            frames = []
+            for step, ovf_file_path in enumerate(ovf_file_path_arr):
+                data, header = rof.read_ovf_file(ovf_file_path, output_mode='both')
+                array = self.get_array(data, header, variables)
 
-        array = data[0, :, :, 0]
+                if array.ndim != 2:
+                    raise ValueError("Only 2D arrays are supported for display.")
 
-        # 関数を呼び出して画像を表示
-        self.display_array_as_image(array)
+                pixmap, scaled_pixmap = mi.make_image(self, array, variables, mode="animation")
 
-        return
+                frames.append(pixmap)
 
-        # Process each OVF file
-        for ovf_file_path in ovf_file_path_arr:
-            # Read the data and headers from the OVF file
-            data, headers = rof.read_ovf_file(ovf_file_path)
-            
-            # Print headers and data shape
-            print("Headers:", headers)
-            print("Data shape:", data.shape)
-            
-            # Access and print a specific data point
-            try:
-                print("Data at [0, 5, 450]:", data[0, 5, 450])
-            except IndexError:
-                print("Index out of range for data array in file:", ovf_file_path)
+                self.update_image_display(scaled_pixmap)
 
+                progress = int((step + 1) / total_steps * 90)
+                QMetaObject.invokeMethod(self.progress_bar, "setValue", Q_ARG(int, progress))
+
+            # GIFアニメーションの生成
+            mi.create_gif(self, frames, variables)
+            QMetaObject.invokeMethod(self.footer_label, "setText", Q_ARG(str, f"GIF animation saved with {len(frames)} frames in the selected directory."))
+
+            QMetaObject.invokeMethod(self.progress_bar, "setValue", Q_ARG(int, 100))
+        else:
+            for step, ovf_file_path in enumerate(ovf_file_path_arr):
+                data, header = rof.read_ovf_file(ovf_file_path, output_mode='both')
+                array = self.get_array(data, header, variables)
+
+                saved_name = os.path.splitext(os.path.basename(ovf_file_path))[0]
+
+                if array.ndim != 2:
+                    raise ValueError("Only 2D arrays are supported for display.")
+
+                scaled_pixmap = mi.make_image(self, array, variables, mode="save", saved_name=saved_name)
+
+                self.update_image_display(scaled_pixmap)
+
+                progress = int((step + 1) / total_steps * 100)
+                QMetaObject.invokeMethod(self.progress_bar, "setValue", Q_ARG(int, progress))
+
+            QMetaObject.invokeMethod(self.footer_label, "setText", Q_ARG(str, f"{len(ovf_file_path_arr)} {variables['Extension'].upper()} files were saved in the selected directory."))
+
+        # 終了後のUIリセット
+        QMetaObject.invokeMethod(self.progress_bar, "hide")
+        QMetaObject.invokeMethod(self, "enable_inputs")
+
+
+    def get_array(self, array, header, variables):
+        # Get the currently selected axes
+        x_axis = variables["Graph X-Axis"]  # Graph X-Axis
+        y_axis = variables["Graph Y-Axis"]  # Graph Y-Axis
+        Nx = variables["N" + variables["Graph X-Axis"]]
+        Ny = variables["N" + variables["Graph Y-Axis"]]
+        plane_index = variables["Plane index"]
+        output_format = variables["Output Format"]
+        vector_dim = header["valuedim"]
+
+        # Determine the unused axis
+        all_axes = ["x", "y", "z"]
+        unused_axis = next(axis for axis in all_axes if axis not in [x_axis, y_axis])
+
+        if vector_dim == 1:
+            vector_index = 0
+        elif "x" == output_format[-1]:
+            vector_index = 0
+        elif "y" == output_format[-1]:
+            vector_index = 1
+        elif "z" == output_format[-1]:
+            vector_index = 2
+        else:
+            # 配列のベクトルをスカラーにして表示するが、未実装
+            vector_index = 0
+
+        # Determine the range for the unused axis
+        if unused_axis == "x":
+            output_array = array[:, :, plane_index, vector_index]
+        elif unused_axis == "y":
+            output_array = array[:, plane_index, :, vector_index]
+        elif unused_axis == "z":
+            output_array = array[plane_index, :, :, vector_index]
+        
+        print("get_array -  output_array.shape :", output_array.shape)
+        print("get_array -  (Ny, Nx) :", (Ny, Nx))
+        if not output_array.shape == (Ny, Nx):
+            output_array = np.transpose(output_array)
+        
+        return output_array
 
 def main():
     app = QApplication(sys.argv)
