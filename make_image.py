@@ -93,10 +93,10 @@ def figure_size_setting(aspect, ax_margin_inch, cbar_width_inch, graph_cbar_dist
 
     if aspect > 1:
         ax_w_px = 1000
-        ax_h_px = int(ax_w_px / aspect)
+        ax_h_px = max(1, int(ax_w_px / aspect))
     else:
         ax_h_px = 1000
-        ax_w_px = int(ax_h_px * aspect)
+        ax_w_px = max(1, int(ax_h_px * aspect))
 
     print("figure_size_setting - ax_w_px: ", ax_w_px)
     print("figure_size_setting - ax_h_px: ", ax_h_px)
@@ -151,7 +151,7 @@ def get_tick_label(tick_label):
     except Exception:
         return None
 
-def make_image(self, array, variables, mode="check", saved_name=""):
+def make_image(self, array, variables, mode="check", saved_name="", arrow_azimuthal_angle_array=None, arrow_magnitude_xy_array=None):
     is_show_axis = variables["Show Axis"]
     is_show_cbar = variables["Show Colorbar"]
 
@@ -175,14 +175,14 @@ def make_image(self, array, variables, mode="check", saved_name=""):
         if None in (Sizex, Sizey):
             aspect = array.shape[1] / array.shape[0] # yoko/tate
         else:
-            aspect = Sizex / Sizey
+            aspect = Sizex / Sizey if is_show_axis else array.shape[1] / array.shape[0]
     else:
         aspect = aspect_ratio_width / aspect_ratio_height # yoko/tate
 
     vmin = variables["Z-Axis Displayed range min"]
     vmax = variables["Z-Axis Displayed range max"]
 
-    extent = None
+    extent = (0, array.shape[1]-1) + (0, array.shape[0]-1)
 
     x_overall_range = (variables["X-Axis Overall range min"] if variables["X-Axis Overall range min"] is None else variables["X-Axis Overall range min"] / x_multiplier, variables["X-Axis Overall range max"] if variables["X-Axis Overall range max"] is None else variables["X-Axis Overall range max"] / x_multiplier)
     x_displayed_range = (variables["X-Axis Displayed range min"] if variables["X-Axis Displayed range min"] is None else variables["X-Axis Displayed range min"] / x_multiplier, variables["X-Axis Displayed range max"] if variables["X-Axis Displayed range max"] is None else variables["X-Axis Displayed range max"] / x_multiplier)
@@ -221,20 +221,15 @@ def make_image(self, array, variables, mode="check", saved_name=""):
     cbar_width_inch = variables["Colorbar Width"] if is_show_cbar else 0
     graph_cbar_distance_inch = variables["Between Graph and Colorbar"]  if is_show_cbar else 0
 
-    graph_font_size = (variables["Label font size"] or 11, variables["Label padding"] or 4, variables["Tick label font size"] or 10, variables["Tick label padding"] or 4)
+    graph_font_size = (variables["Label font size"], variables["Label padding"], variables["Tick label font size"], variables["Tick label padding"])
     
     plt, fig, ax, cax = figure_size_setting(aspect, ax_margin_inch, cbar_width_inch, graph_cbar_distance_inch, is_show_cbar, is_show_axis, graph_font_size)
 
     cmap = get_colormap(variables)
-    im = ax.imshow(array, origin='lower', extent=extent, cmap=cmap, aspect="auto", vmin=vmin, vmax=vmax)
-
-    if is_show_cbar:
-        cb = fig.colorbar(im, cax=cax)
-        z_label = variables["Z-Axis Label"] + " (" + variables["Z-Axis SI prefix"] + variables["Z-Axis Unit"] + ")" if not variables["Z-Axis Unit"] in ["a.u.", "arb.units", "arb.unit"] else  variables["Z-Axis Label"] + " (" + variables["Z-Axis Unit"] + ")"
-        cb.set_label(z_label)   # もしカラーバーがbottomであれば labelpad=graph_font_size[1]-1
-        z_tick_label = get_tick_label(variables["Z-Axis Tick Label"])
-        if z_tick_label:
-            cb.set_ticks(z_tick_label)
+    if array.ndim == 2:
+        im = ax.imshow(array, origin='lower', extent=extent, cmap=cmap, aspect="auto", vmin=vmin, vmax=vmax)
+    elif array.ndim == 3:
+        im = ax.imshow(array, origin='lower', extent=extent, aspect="auto")
     
     if is_show_axis:
         x_label = variables["X-Axis Label"] + " (" + variables["X-Axis SI prefix"] + variables["X-Axis Unit"] + ")"
@@ -249,6 +244,82 @@ def make_image(self, array, variables, mode="check", saved_name=""):
             ax.set_xticks(x_tick_label)
         if y_tick_label:
             ax.set_yticks(y_tick_label)
+    
+    arrow_flag = variables["Show Arrows"]
+    if arrow_flag and arrow_magnitude_xy_array is not None and arrow_azimuthal_angle_array is not None:
+        print("make_image -  extent:", extent)
+        nx, ny = array.shape[0], array.shape[1]
+        block_size = variables["Block Size"]
+        start_x = (nx % block_size) // 2 if nx > block_size else 0
+        stop_x = nx + start_x - (nx % block_size) if nx > block_size else nx
+        start_y = (ny % block_size) // 2 if ny > block_size else 0
+        stop_y = ny + start_y - (ny % block_size) if ny > block_size else ny
+        averaged_array_x_len = block_size if nx > block_size else nx
+        averaged_array_y_len = block_size if ny > block_size else ny
+
+        x0 = extent[0]
+        dx = (extent[1] - extent[0])/(array.shape[1] - 1)
+        y0 = extent[2]
+        dy = (extent[3] - extent[2])/(array.shape[0] - 1)
+
+        print("make_image -  x0, dx:", x0, dx)
+        print("make_image -  y0, dy:", y0, dy)
+        
+        x, y = np.meshgrid(np.arange(start_y + (averaged_array_y_len - 1)/2, stop_y, block_size) * dx + x0, np.arange(start_x + (averaged_array_x_len - 1)/2, stop_x, block_size) * dy + y0)
+
+        print("make_image -  x.shape:", x.shape)
+        # print("make_image -  x:", x)
+        # print("make_image -  y:", y)
+
+        arrow_size_factor = variables["Arrow Lnegth"]   # length
+        arrow_width = variables["Arrow Width"]     # size
+        arrow_color = variables["Arrow Color"] or "white"
+
+        standard_arrow_size = np.min([block_size * dx, block_size * dy])
+
+        # nx, ny = arrow_azimuthal_angle_array.shape
+        # x, y = np.meshgrid(np.arange(ny), np.arange(nx))
+
+        # Compute vector components from azimuthal angle and magnitude
+        u = arrow_magnitude_xy_array * np.cos(arrow_azimuthal_angle_array) * standard_arrow_size * arrow_size_factor  # x-component
+        v = arrow_magnitude_xy_array * np.sin(arrow_azimuthal_angle_array) * standard_arrow_size * arrow_size_factor  # y-component
+        # plt.quiver(x, y, u, v, angles='xy', scale_units='xy', scale=1, color="white", alpha=1, pivot='mid')
+
+        # print("make_image -  u:", u)
+        # print("make_image -  v:", v)
+
+        plt.quiver(
+            x, y, u, v,
+            angles='xy', scale_units='xy', scale=1, alpha=1,
+            pivot='mid', units='inches',
+            color=arrow_color,
+            width=arrow_width,  # 矢印の線の幅
+            headwidth=4,  # 矢じりの幅 (単位: 矢印全体の幅との比率)
+            headlength=5,  # 矢じりの長さ (単位: 矢印全体の長さとの比率)
+            headaxislength=4,  # 矢じりの基部から先端までの長さ (単位: 矢印全体の長さとの比率)
+            minlength=0.1,  # 矢印の最小長 (短すぎる矢印を描画しない)
+            minshaft=1  # 矢印のシャフト部分の最小長さ (単位: 幅との比率)
+        )
+
+        # ax.quiver(
+        #     x, y, u, v, arrow_azimuthal_angle_array, cmap=cmap,
+        #     angles='xy', scale_units='xy', scale=1, alpha=1,
+        #     pivot='mid', units='inches',
+        #     width=arrow_width,  # 矢印の線の幅
+        #     headwidth=4,  # 矢じりの幅 (単位: 矢印全体の幅との比率)
+        #     headlength=5,  # 矢じりの長さ (単位: 矢印全体の長さとの比率)
+        #     headaxislength=4,  # 矢じりの基部から先端までの長さ (単位: 矢印全体の長さとの比率)
+        #     minlength=0.1,  # 矢印の最小長 (短すぎる矢印を描画しない)
+        #     minshaft=1  # 矢印のシャフト部分の最小長さ (単位: 幅との比率)
+        # )
+
+    if is_show_cbar:
+        cb = fig.colorbar(im, cax=cax)
+        z_label = variables["Z-Axis Label"] + " (" + variables["Z-Axis SI prefix"] + variables["Z-Axis Unit"] + ")" if not variables["Z-Axis Unit"] in ["a.u.", "arb.units", "arb.unit"] else  variables["Z-Axis Label"] + " (" + variables["Z-Axis Unit"] + ")"
+        cb.set_label(z_label)   # もしカラーバーがbottomであれば labelpad=graph_font_size[1]-1
+        z_tick_label = get_tick_label(variables["Z-Axis Tick Label"])
+        if z_tick_label:
+            cb.set_ticks(z_tick_label)
 
     if mode == "save":
         output_file_name = saved_name + '.' + variables["Extension"]
@@ -297,7 +368,7 @@ def make_image(self, array, variables, mode="check", saved_name=""):
 def create_gif(self, frames, variables):
     output_file_name = os.path.basename(variables["Input Directory"]) + ".gif"
     output_file_path = os.path.join(variables["Input Directory"], output_file_name)
-    speed = variables["GIF animation speed"] or 100  # デフォルト速度: 100ms
+    speed = variables["GIF animation speed"]  # デフォルト速度: 100ms
 
     pil_images = []
 
