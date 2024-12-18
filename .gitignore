@@ -11,3 +11,6 @@ icon.png
 icon.txt
 .venv
 vectorfig_test.py
+build
+dist
+main.spec
