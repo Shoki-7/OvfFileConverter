@@ -1373,7 +1373,7 @@ class MainWindow(QMainWindow):
         total_steps = len(ovf_file_path_arr)
         
         try:
-            if len(ovf_file_path) == 0:
+            if len(ovf_file_path_arr) == 0:
                 raise ValueError("No OVF files found.")
             if variables["Extension"] == "gif":
                 frames = []
