@@ -4,9 +4,6 @@ from io import BytesIO
 from PyQt5.QtCore import Qt
 from matplotlib.colors import LinearSegmentedColormap
 from mpl_toolkits.axes_grid1 import Divider, Size
-from mpl_toolkits.axes_grid1.mpl_axes import Axes
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-from matplotlib import gridspec
 import numpy as np
 import os
 
@@ -88,7 +85,7 @@ def figure_setting(graph_font_size):
     plt.rcParams['axes.labelpad'] = label_padding
     return plt
 
-def figure_size_setting(aspect, ax_margin_inch, cbar_width_inch, graph_cbar_distance_inch, is_show_cbar, is_show_axis, graph_font_size):
+def figure_size_setting(aspect, ax_margin_inch, cbar_width_inch, graph_cbar_distance_inch, is_show_cbar, is_show_axis, graph_font_size, is_colorbar_bottom=False):
     plt = figure_setting(graph_font_size)
 
     if aspect > 1:
@@ -98,42 +95,58 @@ def figure_size_setting(aspect, ax_margin_inch, cbar_width_inch, graph_cbar_dist
         ax_h_px = 1000
         ax_w_px = max(1, int(ax_h_px * aspect))
 
-    print("figure_size_setting - ax_w_px: ", ax_w_px)
-    print("figure_size_setting - ax_h_px: ", ax_h_px)
-
     fig_dpi = 300
     ax_w_inch = ax_w_px / fig_dpi
     ax_h_inch = ax_h_px / fig_dpi
 
-    fig_w_inch = ax_w_inch + ax_margin_inch[0] + ax_margin_inch[2] + cbar_width_inch + graph_cbar_distance_inch
-    fig_h_inch = ax_h_inch + ax_margin_inch[1] + ax_margin_inch[3]
+    if is_colorbar_bottom:
+        fig_w_inch = ax_w_inch + ax_margin_inch[0] + ax_margin_inch[2]
+        fig_h_inch = ax_h_inch + ax_margin_inch[1] + ax_margin_inch[3] + cbar_width_inch + graph_cbar_distance_inch
+    else:
+        fig_w_inch = ax_w_inch + ax_margin_inch[0] + ax_margin_inch[2] + cbar_width_inch + graph_cbar_distance_inch
+        fig_h_inch = ax_h_inch + ax_margin_inch[1] + ax_margin_inch[3]
 
     fig = plt.figure(dpi=fig_dpi, figsize=(fig_w_inch, fig_h_inch))
 
     # Dividerの設定
     if is_show_cbar:
-        h = [Size.Fixed(ax_margin_inch[0]),  # 左余白
-            Size.Fixed(ax_w_inch),         # プロット領域の幅
-            Size.Fixed(graph_cbar_distance_inch),      # プロットとカラーバーの間のマージン
-            Size.Fixed(cbar_width_inch)]               # カラーバーの幅
+        if is_colorbar_bottom:
+            h = [Size.Fixed(ax_margin_inch[0]), 
+                Size.Fixed(ax_w_inch)]
+            v = [Size.Fixed(ax_margin_inch[1]),    # 下余白
+                Size.Fixed(cbar_width_inch),    # カラーバーの高さ
+                Size.Fixed(graph_cbar_distance_inch),   # プロットとカラーバーの間のマージン
+                Size.Fixed(ax_h_inch)]  # プロット領域の高さ
+        else:
+            h = [Size.Fixed(ax_margin_inch[0]),  # 左余白
+                Size.Fixed(ax_w_inch),          # プロット領域の幅
+                Size.Fixed(graph_cbar_distance_inch),  # プロットとカラーバーの間のマージン
+                Size.Fixed(cbar_width_inch)]    # カラーバーの幅
+            v = [Size.Fixed(ax_margin_inch[1]),  # 下余白
+                Size.Fixed(ax_h_inch)]          # プロット領域の高さ
     else:
         h = [Size.Fixed(ax_margin_inch[0]),  # 左余白
             Size.Fixed(ax_w_inch)]         # プロット領域の幅
-    v = [Size.Fixed(ax_margin_inch[1]),  # 下余白
-        Size.Fixed(ax_h_inch)]         # プロット領域の高さ
-
+        v = [Size.Fixed(ax_margin_inch[1]),  # 下余白
+            Size.Fixed(ax_h_inch)]         # プロット領域の高さ
+    
     divider = Divider(fig, (0, 0, 1, 1), h, v, aspect=False)
 
     # プロット領域
-    ax = fig.add_axes(divider.get_position(), axes_locator=divider.new_locator(nx=1, ny=1))
+    if is_colorbar_bottom and is_show_cbar:
+        ax = fig.add_axes(divider.get_position(), axes_locator=divider.new_locator(nx=1, ny=3))
+    else:
+        ax = fig.add_axes(divider.get_position(), axes_locator=divider.new_locator(nx=1, ny=1))
 
     if not is_show_axis:
         ax.axis("off")
 
     # カラーバー領域
     if is_show_cbar:
-        cax = fig.add_axes(divider.get_position(), axes_locator=divider.new_locator(nx=3, ny=1))
-        # cax.tick_params(labelsize=graph_font_size[0], pad=graph_font_size[1])   # カラーバーのフォントサイズ
+        if is_colorbar_bottom:
+            cax = fig.add_axes(divider.get_position(), axes_locator=divider.new_locator(nx=1, ny=1))
+        else:
+            cax = fig.add_axes(divider.get_position(), axes_locator=divider.new_locator(nx=3, ny=1))
     else:
         cax = None
 
@@ -154,6 +167,7 @@ def get_tick_label(tick_label):
 def make_image(self, array, variables, mode="check", saved_name="", arrow_azimuthal_angle_array=None, arrow_magnitude_xy_array=None):
     is_show_axis = variables["Show Axis"]
     is_show_cbar = variables["Show Colorbar"]
+    is_colorbar_bottom = variables["Colorbar Bottom"]
 
     is_x_axis_reverse = variables["X-Axis Reverse"]
     is_y_axis_reverse = variables["Y-Axis Reverse"]
@@ -183,6 +197,8 @@ def make_image(self, array, variables, mode="check", saved_name="", arrow_azimut
     vmax = variables["Z-Axis Displayed range max"]
 
     extent = (0, array.shape[1]-1) + (0, array.shape[0]-1)
+    is_xaxis_range = False
+    is_yaxis_range = False
 
     x_overall_range = (variables["X-Axis Overall range min"] if variables["X-Axis Overall range min"] is None else variables["X-Axis Overall range min"] / x_multiplier, variables["X-Axis Overall range max"] if variables["X-Axis Overall range max"] is None else variables["X-Axis Overall range max"] / x_multiplier)
     x_displayed_range = (variables["X-Axis Displayed range min"] if variables["X-Axis Displayed range min"] is None else variables["X-Axis Displayed range min"] / x_multiplier, variables["X-Axis Displayed range max"] if variables["X-Axis Displayed range max"] is None else variables["X-Axis Displayed range max"] / x_multiplier)
@@ -195,11 +211,13 @@ def make_image(self, array, variables, mode="check", saved_name="", arrow_azimut
             x_range = (0, array.shape[1]-1)
         else:
             x_range = x_overall_range
+            is_xaxis_range = True
         
         if None in y_overall_range:
             y_range = (0, array.shape[0]-1)
         else:
             y_range = y_overall_range
+            is_yaxis_range = True
 
         extent = x_range + y_range
 
@@ -223,7 +241,7 @@ def make_image(self, array, variables, mode="check", saved_name="", arrow_azimut
 
     graph_font_size = (variables["Label font size"], variables["Label padding"], variables["Tick label font size"], variables["Tick label padding"])
     
-    plt, fig, ax, cax = figure_size_setting(aspect, ax_margin_inch, cbar_width_inch, graph_cbar_distance_inch, is_show_cbar, is_show_axis, graph_font_size)
+    plt, fig, ax, cax = figure_size_setting(aspect, ax_margin_inch, cbar_width_inch, graph_cbar_distance_inch, is_show_cbar, is_show_axis, graph_font_size, is_colorbar_bottom)
 
     cmap = get_colormap(variables)
     if array.ndim == 2:
@@ -258,9 +276,9 @@ def make_image(self, array, variables, mode="check", saved_name="", arrow_azimut
         averaged_array_y_len = block_size if ny > block_size else ny
 
         x0 = extent[0]
-        dx = (extent[1] - extent[0])/(array.shape[1] - 1)
+        dx = (extent[1] - extent[0])/(array.shape[1]) if is_xaxis_range else (extent[1] - extent[0])/(array.shape[1] - 1)
         y0 = extent[2]
-        dy = (extent[3] - extent[2])/(array.shape[0] - 1)
+        dy = (extent[3] - extent[2])/(array.shape[0]) if is_yaxis_range else (extent[3] - extent[2])/(array.shape[0] - 1)
 
         print("make_image -  x0, dx:", x0, dx)
         print("make_image -  y0, dy:", y0, dy)
@@ -275,15 +293,26 @@ def make_image(self, array, variables, mode="check", saved_name="", arrow_azimut
         arrow_width = variables["Arrow Width"]     # size
         arrow_color = variables["Arrow Color"] or "white"
 
-        standard_arrow_size = np.min([block_size * dx, block_size * dy])
+        standard_arrow_size = np.min([block_size * dx, block_size * dy]) * 0.9
 
         # nx, ny = arrow_azimuthal_angle_array.shape
         # x, y = np.meshgrid(np.arange(ny), np.arange(nx))
 
         # Compute vector components from azimuthal angle and magnitude
-        u = arrow_magnitude_xy_array * np.cos(arrow_azimuthal_angle_array) * standard_arrow_size * arrow_size_factor  # x-component
-        v = arrow_magnitude_xy_array * np.sin(arrow_azimuthal_angle_array) * standard_arrow_size * arrow_size_factor  # y-component
-        # plt.quiver(x, y, u, v, angles='xy', scale_units='xy', scale=1, color="white", alpha=1, pivot='mid')
+        u = arrow_magnitude_xy_array * np.cos(arrow_azimuthal_angle_array)  # x-component
+        v = arrow_magnitude_xy_array * np.sin(arrow_azimuthal_angle_array)  # y-component
+
+        # Scale arrow sizes so that the largest arrow fits within the standard_arrow_size
+        magnitude = np.sqrt(u**2 + v**2)
+        max_magnitude = np.max(magnitude)
+
+        if max_magnitude > 0:  # Avoid division by zero
+            scale_factor = standard_arrow_size / max_magnitude
+        else:
+            scale_factor = 1  # Default scale factor when all magnitudes are zero
+
+        u *= scale_factor * arrow_size_factor
+        v *= scale_factor * arrow_size_factor
 
         # print("make_image -  u:", u)
         # print("make_image -  v:", v)
@@ -314,24 +343,30 @@ def make_image(self, array, variables, mode="check", saved_name="", arrow_azimut
         # )
 
     if is_show_cbar:
-        cb = fig.colorbar(im, cax=cax)
+        # cb = fig.colorbar(im, cax=cax)
+        cb = fig.colorbar(im, cax=cax, orientation="horizontal" if is_colorbar_bottom else "vertical")
         z_label = variables["Z-Axis Label"] + " (" + variables["Z-Axis SI prefix"] + variables["Z-Axis Unit"] + ")" if not variables["Z-Axis Unit"] in ["a.u.", "arb.units", "arb.unit"] else  variables["Z-Axis Label"] + " (" + variables["Z-Axis Unit"] + ")"
-        cb.set_label(z_label)   # もしカラーバーがbottomであれば labelpad=graph_font_size[1]-1
+        if is_colorbar_bottom:
+            cb.set_label(z_label, labelpad=graph_font_size[1] - 1)
+        else:
+            cb.set_label(z_label, labelpad=graph_font_size[1])
         z_tick_label = get_tick_label(variables["Z-Axis Tick Label"])
         if z_tick_label:
             cb.set_ticks(z_tick_label)
+
+    saved_dpi = variables["dpi"]
 
     if mode == "save":
         output_file_name = saved_name + '.' + variables["Extension"]
         output_file_path = os.path.join(variables["Input Directory"], output_file_name)
         
         # plt.tight_layout()
-        plt.savefig(output_file_path, transparent=True, dpi=300, bbox_inches='tight')
+        plt.savefig(output_file_path, transparent=True, dpi=saved_dpi, bbox_inches='tight')
 
     if mode == "animation":
         # MatplotlibのプロットをQPixmapに変換
         buf = BytesIO()
-        plt.savefig(buf, format="png", transparent=False, dpi=300)
+        plt.savefig(buf, format="png", transparent=False, dpi=saved_dpi)
         buf.seek(0)
         plt.clf()
         plt.close()

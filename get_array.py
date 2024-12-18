@@ -97,9 +97,20 @@ def get_rgb_colormap(array, vector_idx):
     # Normalize azimuthal angle to [0, 1] for color mapping
     azimuthal_normalized = (azimuthal_angle_array + np.pi) / (2 * np.pi)
 
+    hue_rotation = 0.5
+    # Rotate the hue (azimuthal angle) and ensure it wraps within [0, 1]
+    azimuthal_normalized = (azimuthal_normalized + hue_rotation) % 1.0
+
     # Map polar angle to brightness (1 for 0°, 0 for 180° in polar coordinates)
     brightness = 1 - (polar_angle_array / np.pi)
-    brightness_normalized = (brightness - np.min(brightness)) / (np.max(brightness) - np.min(brightness))
+
+    max_brightness = np.max(brightness)
+    min_brightness = np.min(brightness)
+
+    if max_brightness == min_brightness:
+        brightness_normalized = np.ones_like(brightness)  # 最大値と最小値が等しい場合、全て 1
+    else:
+        brightness_normalized = (brightness - min_brightness) / (max_brightness - min_brightness)  # 0〜1に正規化
 
     # Create an HSV color map (Hue from azimuthal, Value from brightness, Saturation=1)
     hsv_colors = np.zeros_like(array)
