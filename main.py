@@ -50,7 +50,7 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, window_width, window_height)
         self.setFixedSize(window_width, window_height)
 
-        is_debug = True
+        is_debug = False
 
         # Set the style sheet for the main window
         font_size = f"{int(14 * scale_factor)}px"
