@@ -50,7 +50,7 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, window_width, window_height)
         self.setFixedSize(window_width, window_height)
 
-        is_debug = False
+        self.is_debug = False
 
         # Set the style sheet for the main window
         font_size = f"{int(14 * scale_factor)}px"
@@ -146,7 +146,7 @@ class MainWindow(QMainWindow):
         # Input path (directory only)
         input_layout = QHBoxLayout()
         input_label = QLabel("Input Directory:")
-        if is_debug:
+        if self.is_debug:
             self.input_line = QLineEdit(os.path.join(os.getcwd(), "TestOvfFiles2"))
         else:
             self.input_line = QLineEdit()    
@@ -751,7 +751,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(footer_layout)
 
         # メインレイアウトをウィンドウにセット
-        main_widget.setLayout(main_layout)
+        # main_widget.setLayout(main_layout)
         
         # initialize
         self.update_N(self.input_line.text())
@@ -767,7 +767,7 @@ class MainWindow(QMainWindow):
         self.update_arrow()
         self.update_colormap(self.format_combo.currentText())
 
-        if is_debug:
+        if self.is_debug:
             self.update_output_format_options(self.get_first_ovf_file_header(self.input_line.text()))
             self.update_plane_index_options()
             self.update_ovf_file_combo(self.input_line.text())
@@ -816,8 +816,8 @@ class MainWindow(QMainWindow):
                 # 最初の OVF ファイルのヘッダーを読み取る
                 header = rof.read_ovf_file(ovf_file_path_arr[0], output_mode='headers')
             except Exception as e:
-                print("Error reading OVF file:", e)
-        print("get_first_ovf_file_header - header :", header)
+                self.debug_print("Error reading OVF file:", e)
+        self.debug_print("get_first_ovf_file_header - header :", header)
         return header
     
     def update_N(self, directory):
@@ -827,14 +827,14 @@ class MainWindow(QMainWindow):
             try:
                 # 最初の OVF ファイルのヘッダーを読み取る
                 headers = rof.read_ovf_file(ovf_file_path_arr[0], output_mode='headers')
-                print("update_N - headers :", headers)
+                self.debug_print("update_N - headers :", headers)
 
                 # Nx, Ny, Nz に対応する値を設定
                 self.grid_inputs["Nx"].setText(str(headers.get("xnodes", "")))
                 self.grid_inputs["Ny"].setText(str(headers.get("ynodes", "")))
                 self.grid_inputs["Nz"].setText(str(headers.get("znodes", "")))
             except Exception as e:
-                print("Error reading OVF file:", e)
+                self.debug_print("Error reading OVF file:", e)
 
         else:
             self.grid_inputs["Nx"].setText("")
@@ -1036,15 +1036,16 @@ class MainWindow(QMainWindow):
     def update_colormap(self, output_format, current_colormap_name=None):
         self.colormap_combo.clear()
 
-        for colormap_name, base64_data in cs.colormap_data.items():
-            if output_format and output_format[-1] in ["x", "y", "z"]:
-                pass  
-            elif colormap_name != "hsv":
-                continue  
+        if not output_format == "":
+            for colormap_name, base64_data in cs.colormap_data.items():
+                if output_format and output_format[-1] in ["x", "y", "z"]:
+                    pass
+                elif colormap_name != "hsv":
+                    continue  
 
-            pixmap = cs.colormapFromBase64(base64_data)
-            icon = QIcon(pixmap)
-            self.colormap_combo.addItem(icon, colormap_name)
+                pixmap = cs.colormapFromBase64(base64_data)
+                icon = QIcon(pixmap)
+                self.colormap_combo.addItem(icon, colormap_name)
 
         if current_colormap_name:
             self.colormap_combo.setCurrentText(current_colormap_name)
@@ -1145,7 +1146,7 @@ class MainWindow(QMainWindow):
             if value is None or key in ["Nx", "Ny", "Nz"]:  # Noneの場合はスキップ
                 continue
 
-            # print("set_variables_to_ui -  key, value:", key, value)
+            self.debug_print("set_variables_to_ui -  key, value:", key, value)
 
             if key in self.grid_inputs:
                 widget = self.grid_inputs[key]
@@ -1293,7 +1294,7 @@ class MainWindow(QMainWindow):
         except ValueError:
             variables = {key: float('nan') for key in ["Nx", "Ny", "Nz", "Plane index", "Sizex", "Sizey", "Sizez"]}
 
-        print("get_variables - variables :", variables)
+        self.debug_print("get_variables - variables :", variables)
 
         return variables
 
@@ -1309,14 +1310,16 @@ class MainWindow(QMainWindow):
         
         try:
             ovf_file_path = os.path.join(variables["Input Directory"], variables["Displayed OVF File"])
+            if len(ovf_file_path) == 0:
+                raise ValueError("No OVF files found.")
 
             # OVFファイルの読み込み
             data, header = rof.read_ovf_file(ovf_file_path, output_mode='both')
-            print("show_images - data.shape :", data.shape)
+            self.debug_print("show_images - data.shape :", data.shape)
 
             # 配列の取得と処理
-            array, arrow_azimuthal_angle_array, arrow_magnitude_xy_array = ga.get_array(data, header, variables)
-            print("show_images - array.shape :", array.shape)
+            array, arrow_azimuthal_angle_array, arrow_magnitude_xy_array = ga.get_array(self, data, header, variables)
+            self.debug_print("show_images - array.shape :", array.shape)
 
             output_format = variables["Output Format"]
 
@@ -1343,7 +1346,7 @@ class MainWindow(QMainWindow):
             self.update_image_display(scaled_pixmap)
 
         except Exception as e:
-            QMetaObject.invokeMethod(self.footer_label, f"Error: {str(e)}")
+            QMetaObject.invokeMethod(self.footer_label, "setText", Q_ARG(str, f"Error: {str(e)}"))
         finally:
             QMetaObject.invokeMethod(self, "enable_inputs", Qt.QueuedConnection)
 
@@ -1368,15 +1371,17 @@ class MainWindow(QMainWindow):
 
         ovf_file_path_arr = glob.glob(os.path.join(variables["Input Directory"], "*.ovf"))
         total_steps = len(ovf_file_path_arr)
-
+        
         try:
+            if len(ovf_file_path) == 0:
+                raise ValueError("No OVF files found.")
             if variables["Extension"] == "gif":
                 frames = []
                 for step, ovf_file_path in enumerate(ovf_file_path_arr):
                     if self.cancel_event.is_set():  # 中断フラグを確認
                         raise RuntimeError("Operation canceled by the user.")
                     data, header = rof.read_ovf_file(ovf_file_path, output_mode='both')
-                    array, arrow_azimuthal_angle_array, arrow_magnitude_xy_array = ga.get_array(data, header, variables)
+                    array, arrow_azimuthal_angle_array, arrow_magnitude_xy_array = ga.get_array(self, data, header, variables)
 
                     output_format = variables["Output Format"]
 
@@ -1406,7 +1411,7 @@ class MainWindow(QMainWindow):
                     if self.cancel_event.is_set():  # 中断フラグを確認
                         raise RuntimeError("Operation canceled by the user.")
                     data, header = rof.read_ovf_file(ovf_file_path, output_mode='both')
-                    array, arrow_azimuthal_angle_array, arrow_magnitude_xy_array = ga.get_array(data, header, variables)
+                    array, arrow_azimuthal_angle_array, arrow_magnitude_xy_array = ga.get_array(self, data, header, variables)
 
                     saved_name = os.path.splitext(os.path.basename(ovf_file_path))[0]
 
@@ -1435,6 +1440,10 @@ class MainWindow(QMainWindow):
             # UIリセット
             QMetaObject.invokeMethod(self.progress_bar, "hide", Qt.QueuedConnection)
             QMetaObject.invokeMethod(self, "enable_inputs", Qt.QueuedConnection)
+    
+    def debug_print(self, *args):
+        if self.is_debug:
+            print(*args)
 
 def main():
     app = QApplication(sys.argv)

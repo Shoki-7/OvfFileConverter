@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib.colors import hsv_to_rgb
 
-def get_array(array, header, variables):
+def get_array(self, array, header, variables):
     # Get the currently selected axes
     x_axis = variables["Graph X-Axis"]  # Graph X-Axis
     y_axis = variables["Graph Y-Axis"]  # Graph Y-Axis
@@ -34,30 +34,30 @@ def get_array(array, header, variables):
     elif unused_axis == "z":
         output_array = array[plane_index, :, :, :]
 
-    print("get_array -  vector_index :", vector_index)
+    self.debug_print("get_array -  vector_index :", vector_index)
 
     if vector_index != 3:
         output_array = output_array[:, :, vector_index]
         
-        print("get_array -  output_array.shape :", output_array.shape)
-        print("get_array -  (Ny, Nx) :", (Ny, Nx))
+        self.debug_print("get_array -  output_array.shape :", output_array.shape)
+        self.debug_print("get_array -  (Ny, Nx) :", (Ny, Nx))
 
         if not output_array.shape == (Ny, Nx):
             output_array = np.transpose(output_array)
         
         return output_array, None, None
     else:
-        print("get_array -  output_array.shape :", output_array.shape)
-        print("get_array -  (Ny, Nx, 3) :", (Ny, Nx, 3))
+        self.debug_print("get_array -  output_array.shape :", output_array.shape)
+        self.debug_print("get_array -  (Ny, Nx, 3) :", (Ny, Nx, 3))
         
         if not output_array.shape == (Ny, Nx, 3):
             output_array = np.transpose(output_array, axes=(1, 0, 2))
         
         idx_dict = {"x" : 0, "y" : 1, "z" : 2}
         vector_idx = (idx_dict[x_axis], idx_dict[y_axis], idx_dict[unused_axis])
-        print("get_array -  vector_idx:", vector_idx)
+        self.debug_print("get_array -  vector_idx:", vector_idx)
 
-        print("get_array -  self.get_rgb_colormap(output_array).shape :", get_rgb_colormap(output_array, vector_idx).shape)
+        self.debug_print("get_array -  self.get_rgb_colormap(output_array).shape :", get_rgb_colormap(output_array, vector_idx).shape)
 
         arrow_azimuthal_angle_array, arrow_magnitude_xy_array = None, None
 
@@ -65,7 +65,7 @@ def get_array(array, header, variables):
 
         if arrow_flag:
             block_size = variables["Block Size"]
-            arrow_array = average_vector_field(output_array, block_size)
+            arrow_array = average_vector_field(self, output_array, block_size)
             arrow_azimuthal_angle_array, arrow_magnitude_xy_array = compute_azimuthal_and_magnitude(arrow_array, vector_idx)
 
         return get_rgb_colormap(output_array, vector_idx), arrow_azimuthal_angle_array, arrow_magnitude_xy_array
@@ -146,7 +146,7 @@ def compute_azimuthal_and_magnitude(array, vector_idx):
 
     return azimuthal_angle_array, magnitude_xy_array
 
-def average_vector_field(array, block_size):
+def average_vector_field(self, array, block_size):
     """
     Compute the averaged vector field for an input array by averaging over block_size x block_size blocks.
     If the dimensions are not divisible by block_size, center the averaging window.
@@ -166,10 +166,10 @@ def average_vector_field(array, block_size):
     stop_x = nx + start_x - (nx % block_size) if nx > block_size else nx
     stop_y = ny + start_y - (ny % block_size) if ny > block_size else ny
 
-    print("average_vector_field -  start_x, stop_x:", start_x, stop_x)
-    print("average_vector_field -  start_y, stop_y:", start_y, stop_y)
-    print("average_vector_field -  nx % block_size:", nx % block_size)
-    print("average_vector_field -  ny % block_size:", ny % block_size)
+    self.debug_print("average_vector_field -  start_x, stop_x:", start_x, stop_x)
+    self.debug_print("average_vector_field -  start_y, stop_y:", start_y, stop_y)
+    self.debug_print("average_vector_field -  nx % block_size:", nx % block_size)
+    self.debug_print("average_vector_field -  ny % block_size:", ny % block_size)
 
     # Slice the array to ensure divisibility by block_size
     sliced_array = array[start_x:stop_x, start_y:stop_y, :]
@@ -177,7 +177,7 @@ def average_vector_field(array, block_size):
     # New dimensions after slicing
     new_nx, new_ny, _ = sliced_array.shape
 
-    print("average_vector_field -  sliced_array.shape:", sliced_array.shape)
+    self.debug_print("average_vector_field -  sliced_array.shape:", sliced_array.shape)
 
     averaged_array_nx = new_nx // block_size if nx > block_size else 1
     averaged_array_ny = new_ny // block_size if ny > block_size else 1
@@ -187,6 +187,6 @@ def average_vector_field(array, block_size):
     # Reshape and compute the mean over block_size x block_size blocks
     averaged_array = sliced_array.reshape(averaged_array_nx, averaged_array_x_len, averaged_array_ny, averaged_array_y_len, 3).mean(axis=(1, 3))
 
-    print("average_vector_field -  averaged_array.shape:", averaged_array.shape)
+    self.debug_print("average_vector_field -  averaged_array.shape:", averaged_array.shape)
 
     return averaged_array

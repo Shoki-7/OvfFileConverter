@@ -9,6 +9,9 @@ import os
 
 from PIL import Image
 
+import matplotlib
+matplotlib.use('Agg')
+
 def gen_cmap_rgb(cols):
     nmax = float(len(cols)-1)
     cdict = {'red':[], 'green':[], 'blue':[]}
