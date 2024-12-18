@@ -5,3 +5,9 @@ TestOvfFiles4
 __pycache__
 footer_widget.py
 MakeColorbar
+icon.ai
+icon.gif
+icon.png
+icon.txt
+.venv
+vectorfig_test.py

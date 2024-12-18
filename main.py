@@ -19,6 +19,7 @@ import json
 import make_image as mi
 import colormap_stocks as cs
 import get_array as ga
+import get_icon as gi
 
 try:
     import footer_widget as fw
@@ -1437,6 +1438,7 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    app.setWindowIcon(gi.iconFromBase64())
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())

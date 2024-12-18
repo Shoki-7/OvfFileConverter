@@ -1,6 +1,5 @@
 import struct
 import numpy as np
-import re
 
 def read_ovf_file(filename, output_mode='both'):
     """
